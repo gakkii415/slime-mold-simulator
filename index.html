@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Slime Mold Simulator</title>
+<style>
+:root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#040507;color:#fff;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;image-rendering:auto}
+.top{position:fixed;left:12px;right:12px;top:max(12px,env(safe-area-inset-top));z-index:4;display:flex;gap:8px;align-items:center;pointer-events:none}
+.brand{background:#0b0e12d9;border:1px solid #ffffff1a;border-radius:14px;padding:10px 12px;font-weight:700;backdrop-filter:blur(16px);white-space:nowrap}
+.actions{margin-left:auto;display:flex;gap:8px;pointer-events:auto}
+button{appearance:none;border:1px solid #ffffff22;background:#0b0e12df;color:#fff;border-radius:12px;padding:10px 12px;font-size:14px;font-weight:650;backdrop-filter:blur(16px)}
+button:active{transform:scale(.97)}
+.bottom{position:fixed;left:12px;right:12px;bottom:max(14px,env(safe-area-inset-bottom));z-index:4;background:#0b0e12d9;border:1px solid #ffffff1a;border-radius:16px;padding:11px 12px;backdrop-filter:blur(16px);display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center}
+label,.count{font-size:12px;color:#d9dde4}.hint{position:fixed;left:50%;top:58px;transform:translateX(-50%);z-index:3;color:#ffffff88;font-size:12px;pointer-events:none;white-space:nowrap}
+.version{position:fixed;right:10px;bottom:4px;font-size:10px;color:#ffffff55;z-index:5;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div class="top"><div class="brand">Slime Mold Simulator</div><div class="actions"><button id="pause">一時停止</button><button id="reset">再生成</button></div></div>
+<div class="hint">触れた場所に栄養を置く</div>
+<div class="bottom"><label>粒子</label><input id="amount" type="range" min="6000" max="30000" step="2000" value="18000"><div class="count" id="count">18,000</div></div>
+<div class="version">v1</div>
+<script>
+(() => {
+  const canvas=document.getElementById('view');
+  const ctx=canvas.getContext('2d',{alpha:false});
+  const off=document.createElement('canvas');
+  const octx=off.getContext('2d',{alpha:false});
+  const amount=document.getElementById('amount'), count=document.getElementById('count');
+  const pauseBtn=document.getElementById('pause'), resetBtn=document.getElementById('reset');
+  let simW=0,simH=0,size=0,field,next,img,px,py,pa,particleCount=18000,paused=false;
+  let foodX=-999,foodY=-999,foodLife=0;
+  const sensorAngle=.62,sensorDist=7.5,turnSpeed=.43,moveSpeed=1.18,deposit=2.7,decay=.965;
+
+  function setup(){
+    const dpr=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(innerWidth*dpr);canvas.height=Math.round(innerHeight*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);
+    simW=Math.max(150,Math.min(260,Math.round(innerWidth*.58)));
+    simH=Math.max(220,Math.min(460,Math.round(simW*innerHeight/innerWidth)));
+    off.width=simW;off.height=simH;size=simW*simH;
+    field=new Float32Array(size);next=new Float32Array(size);img=octx.createImageData(simW,simH);
+    seedParticles();
+  }
+  function seedParticles(){
+    particleCount=Number(amount.value); count.textContent=particleCount.toLocaleString('ja-JP');
+    px=new Float32Array(particleCount);py=new Float32Array(particleCount);pa=new Float32Array(particleCount);field.fill(0);next.fill(0);
+    const cx=simW/2,cy=simH/2,r=Math.min(simW,simH)*.34;
+    for(let i=0;i<particleCount;i++){
+      const a=Math.random()*Math.PI*2,rr=Math.sqrt(Math.random())*r;
+      px[i]=cx+Math.cos(a)*rr;py[i]=cy+Math.sin(a)*rr;pa[i]=a+(Math.random()-.5)*1.2;
+    }
+  }
+  addEventListener('resize',setup,{passive:true});
+  amount.addEventListener('input',()=>count.textContent=Number(amount.value).toLocaleString('ja-JP'));
+  amount.addEventListener('change',seedParticles);
+  resetBtn.onclick=seedParticles;
+  pauseBtn.onclick=()=>{paused=!paused;pauseBtn.textContent=paused?'再開':'一時停止'};
+
+  function placeFood(clientX,clientY){foodX=clientX/innerWidth*simW;foodY=clientY/innerHeight*simH;foodLife=220;}
+  addEventListener('pointerdown',e=>placeFood(e.clientX,e.clientY));
+  addEventListener('pointermove',e=>{if(e.buttons)placeFood(e.clientX,e.clientY)});
+
+  function sample(x,y,a){
+    const sx=Math.round(x+Math.cos(a)*sensorDist),sy=Math.round(y+Math.sin(a)*sensorDist);
+    if(sx<1||sx>=simW-1||sy<1||sy>=simH-1)return 0;
+    let v=field[sy*simW+sx];
+    if(foodLife>0){const dx=sx-foodX,dy=sy-foodY;const d2=dx*dx+dy*dy;v+=Math.max(0,15-d2*.18)}
+    return v;
+  }
+  function particlesStep(){
+    for(let i=0;i<particleCount;i++){
+      let x=px[i],y=py[i],a=pa[i];
+      const f=sample(x,y,a),l=sample(x,y,a-sensorAngle),r=sample(x,y,a+sensorAngle);
+      if(l>f&&l>r)a-=turnSpeed*(.65+Math.random()*.7);
+      else if(r>f&&r>l)a+=turnSpeed*(.65+Math.random()*.7);
+      else if(f<l&&f<r)a+=(Math.random()-.5)*turnSpeed*2.2;
+      else a+=(Math.random()-.5)*.06;
+      x+=Math.cos(a)*moveSpeed;y+=Math.sin(a)*moveSpeed;
+      if(x<1||x>=simW-1||y<1||y>=simH-1){x=Math.max(1,Math.min(simW-2,x));y=Math.max(1,Math.min(simH-2,y));a=Math.random()*Math.PI*2;}
+      px[i]=x;py[i]=y;pa[i]=a;const idx=(y|0)*simW+(x|0);field[idx]=Math.min(55,field[idx]+deposit);
+    }
+  }
+  function diffuse(){
+    for(let y=1;y<simH-1;y++){
+      let row=y*simW;
+      for(let x=1;x<simW-1;x++){
+        const i=row+x;
+        next[i]=((field[i]*2+field[i-1]+field[i+1]+field[i-simW]+field[i+simW]+field[i-simW-1]+field[i-simW+1]+field[i+simW-1]+field[i+simW+1])/10)*decay;
+      }
+    }
+    const t=field;field=next;next=t;next.fill(0);
+    if(foodLife>0){foodLife--;const fx=foodX|0,fy=foodY|0;if(fx>2&&fy>2&&fx<simW-2&&fy<simH-2){for(let yy=-2;yy<=2;yy++)for(let xx=-2;xx<=2;xx++)field[(fy+yy)*simW+(fx+xx)]+=5}}
+  }
+  function render(){
+    const d=img.data;
+    for(let i=0,j=0;i<size;i++,j+=4){
+      const v=Math.min(1,field[i]/12),v2=v*v;
+      d[j]=Math.round(18+40*v2);d[j+1]=Math.round(12+210*v);d[j+2]=Math.round(24+175*Math.sqrt(v));d[j+3]=255;
+    }
+    octx.putImageData(img,0,0);ctx.imageSmoothingEnabled=true;ctx.fillStyle='#040507';ctx.fillRect(0,0,innerWidth,innerHeight);ctx.drawImage(off,0,0,innerWidth,innerHeight);
+    if(foodLife>0){ctx.beginPath();ctx.arc(foodX/simW*innerWidth,foodY/simH*innerHeight,7,0,Math.PI*2);ctx.fillStyle='rgba(255,230,130,.75)';ctx.fill();}
+  }
+  function loop(){if(!paused){particlesStep();diffuse();}render();requestAnimationFrame(loop)}
+  setup();loop();
+})();
+</script>
+</body>
+</html>
